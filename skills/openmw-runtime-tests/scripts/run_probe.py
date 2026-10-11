@@ -1,4 +1,4 @@
-"""Run a player-context Lua probe in an isolated OpenMW session (Windows v1)."""
+"""Run a player, global, or actor Lua probe in an isolated OpenMW session (Windows)."""
 import argparse
 import hashlib
 import json
@@ -29,6 +29,11 @@ def sha256(path):
 def validate_inputs(args):
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         raise ValueError('--timeout must be a finite positive number')
+    if args.context == 'actor':
+        if not args.actor_record or not args.actor_record.strip() or any(ord(c) < 32 for c in args.actor_record):
+            raise ValueError('--context actor requires --actor-record with a valid NPC/creature record ID')
+    elif args.actor_record is not None:
+        raise ValueError('--actor-record is only valid with --context actor')
     args.openmw = args.openmw.resolve(strict=True)
     args.resources = args.resources.resolve(strict=True)
     args.probe = args.probe.resolve(strict=True)
@@ -65,11 +70,22 @@ def prepare(args, run_id):
     config.mkdir()
     (out / 'user-data').mkdir()
     shutil.copy2(args.probe, script_dir / 'case.lua')
-    driver = (ASSETS / 'driver.lua').read_text(encoding='utf-8')
-    if driver.count('__RUN_ID__') != 1:
-        raise ValueError('Invalid bundled driver: expected one run-id placeholder')
-    (script_dir / 'driver.lua').write_text(driver.replace('__RUN_ID__', run_id), encoding='utf-8')
-    (data / PROBE_CONTENT).write_text('PLAYER: scripts/omw_runtime_test/driver.lua\n', encoding='utf-8')
+
+    def stage(name, replacements):
+        source = (ASSETS / name).read_text(encoding='utf-8')
+        for key, value in replacements.items():
+            if source.count(key) != 1:
+                raise ValueError(f'Invalid bundled {name}: expected one {key} placeholder')
+            source = source.replace(key, value)
+        (script_dir / name).write_text(source, encoding='utf-8')
+
+    stage('driver.lua', {'__RUN_ID__': run_id, '__CONTEXT__': args.context})
+    if args.context == 'actor':
+        stage('actor_host.lua', {'__RUN_ID__': run_id, '__ACTOR_RECORD__': json.dumps(args.actor_record, ensure_ascii=False)})
+        registration = 'GLOBAL: scripts/omw_runtime_test/actor_host.lua\nCUSTOM: scripts/omw_runtime_test/driver.lua\n'
+    else:
+        registration = args.context.upper() + ': scripts/omw_runtime_test/driver.lua\n'
+    (data / PROBE_CONTENT).write_text(registration, encoding='utf-8')
     lines = ['replace=data', 'replace=content', 'replace=fallback-archive', 'replace=groundcover',
              f'resources={cfg_path(args.resources)}', 'encoding=win1252']
     builtin = args.resources / 'vfs-mw'
@@ -156,12 +172,15 @@ def main(argv=None):
     parser.add_argument('--content', action='append', required=True, help='Content filename; repeat in load order')
     parser.add_argument('--archive', action='append', default=[], help='BSA filename; repeat in load order')
     parser.add_argument('--probe', type=Path, required=True, help='Lua module returning {step=function, cleanup=function?}')
+    parser.add_argument('--context', choices=['player', 'global', 'actor'], default='player',
+                        help='Native script context (default: player); one probe per session')
+    parser.add_argument('--actor-record', help='NPC/creature record ID to instantiate for an actor probe')
     parser.add_argument('--output', type=Path, required=True, help='New directory for configuration, storage and evidence')
     parser.add_argument('--start', default='Vivec, Arena Pit', help='Start cell from supplied game content')
     parser.add_argument('--timeout', type=float, default=45)
     args = parser.parse_args(argv)
     if sys.platform != 'win32':
-        parser.error('Version 1 supports Windows; other platforms have not been validated')
+        parser.error('The runner supports Windows; other platforms have not been validated')
     try:
         validate_inputs(args)
         run_id = uuid.uuid4().hex
@@ -174,7 +193,10 @@ def main(argv=None):
                      [args.output / 'stdout.txt', args.output / 'stderr.txt', args.output / 'config' / 'openmw.log']
                      if path.is_file())
     result = {'run_id': run_id, 'command': command, 'platform': sys.platform,
+              'context': args.context, 'actor_record': args.actor_record,
               'probe_sha256': sha256(args.output / 'data' / 'scripts' / 'omw_runtime_test' / 'case.lua'),
+              'staged_scripts_sha256': {p.name: sha256(p) for p in
+                                       (args.output / 'data' / 'scripts' / 'omw_runtime_test').glob('*.lua')},
               'runner_sha256': sha256(__file__), 'content': args.content,
               **process_result, **assess(stdout, logs, run_id, process_result)}
     (args.output / 'result.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')

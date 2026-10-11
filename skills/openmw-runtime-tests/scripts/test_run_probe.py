@@ -1,5 +1,6 @@
 """Runner regressions; no OpenMW/game installation is needed."""
 import argparse
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -53,7 +54,7 @@ class FilesAndProcess(unittest.TestCase):
         probe.write_text('return {step=function() return true end}')
         self.args = argparse.Namespace(openmw=Path(sys.executable), resources=resources, probe=probe,
                                        data=[data], content=['game.esm'], archive=[], timeout=2,
-                                       output=self.base / 'run', start='Test Cell')
+                                       output=self.base / 'run', start='Test Cell', context='player', actor_record=None)
 
     def test_profile_isolated_and_existing_output_refused(self):
         runner.validate_inputs(self.args)
@@ -69,6 +70,43 @@ class FilesAndProcess(unittest.TestCase):
                          'PLAYER: scripts/omw_runtime_test/driver.lua\n')
         with self.assertRaises(ValueError):
             runner.validate_inputs(self.args)
+
+    def test_global_registration_has_no_player_or_actor_host(self):
+        self.args.context = 'global'
+        runner.validate_inputs(self.args)
+        runner.prepare(self.args, 'test-id')
+        self.assertEqual((self.args.output / 'data' / runner.PROBE_CONTENT).read_text(),
+                         'GLOBAL: scripts/omw_runtime_test/driver.lua\n')
+        scripts = self.args.output / 'data' / 'scripts' / 'omw_runtime_test'
+        self.assertFalse((scripts / 'actor_host.lua').exists())
+        self.assertIn("local context = 'global'", (scripts / 'driver.lua').read_text())
+
+    def test_actor_registration_stages_host_and_safely_quotes_record(self):
+        self.args.context = 'actor'
+        self.args.actor_record = 'record" with \\ punctuation'
+        runner.validate_inputs(self.args)
+        runner.prepare(self.args, 'test-id')
+        self.assertEqual((self.args.output / 'data' / runner.PROBE_CONTENT).read_text(),
+                         'GLOBAL: scripts/omw_runtime_test/actor_host.lua\nCUSTOM: scripts/omw_runtime_test/driver.lua\n')
+        scripts = self.args.output / 'data' / 'scripts' / 'omw_runtime_test'
+        host = (scripts / 'actor_host.lua').read_text()
+        self.assertIn('local recordId = ' + json.dumps(self.args.actor_record), host)
+        self.assertIn("local runId = 'test-id'", host)
+        self.assertIn("local context = 'actor'", (scripts / 'driver.lua').read_text())
+
+    def test_actor_context_requires_record(self):
+        self.args.context = 'actor'
+        for record in [None, '', ' ', 'rat\nother', 'rat\x00', 'rat\x1f']:
+            self.args.actor_record = record
+            with self.assertRaises(ValueError):
+                runner.validate_inputs(self.args)
+
+    def test_actor_record_refused_in_other_contexts(self):
+        self.args.actor_record = 'rat'
+        for context in ['player', 'global']:
+            self.args.context = context
+            with self.assertRaises(ValueError):
+                runner.validate_inputs(self.args)
 
     def test_output_inside_game_data_refused(self):
         self.args.output = self.args.data[0] / 'generated'

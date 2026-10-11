@@ -4,7 +4,7 @@ A small agent skill and Python harness for running Lua regression probes inside
 the actual OpenMW engine. An agent can write a test, launch an isolated session,
 read failures and timings, change the code, and rerun the same test.
 
-The harness supplies configuration, a player-script driver, process launch,
+The harness supplies configuration, player/global/actor drivers, process launch,
 logging and completion checks. OpenMW executes the Lua; there is no AI component
 inside the engine and no special connector is required. The runner also works
 directly from a terminal without an agent.
@@ -58,8 +58,23 @@ across frames, checks its layout, destroys it, and verifies destruction. It
 requires no WandForge, UI Toolkit, SFP or other mod. Add explicitly ordered
 `--data` and `--content` arguments to test your own mod and its dependencies.
 
-The Lua probe returns a table with `step()` and optional `cleanup()`. The driver
-calls `step()` on each player `onFrame` after the player enters a cell. Returning
+Choose one context per session:
+
+| Context | CLI arguments | Bundled example |
+|---|---|---|
+| Player (default) | `--context player` | `assets/ui_lifecycle.lua`: native UI update and destruction |
+| Global | `--context global` | `assets/global_lifecycle.lua`: create, place, and remove a world object |
+| Actor | `--context actor --actor-record rat` | `assets/actor_stats.lua`: modify and restore a creature/NPC's health |
+
+The asset paths above are under `skills/openmw-runtime-tests/`. Use the same
+launch command with the chosen context/probe and a fresh output directory.
+For an NPC check, replace `rat` with an NPC record ID such as `fargoth`.
+Actor mode creates a new instance; it does not select the existing world actor.
+A global host attaches the actor driver, checks messages in both directions,
+and verifies the new actor was removed before reporting success.
+
+The Lua probe returns a table with `step(dt)` and optional `cleanup()`. The driver
+calls it on each player `onFrame` or global/actor `onUpdate` after the cell is ready. Returning
 `true` finishes the probe; assertion failures finish with a failed result.
 See [the probe contract and usage guide](skills/openmw-runtime-tests/references/usage.md).
 
@@ -87,8 +102,11 @@ intervals include other engine work and are not isolated UI/GPU render timings.
 The small example demonstrates instrumentation; it is not a performance benchmark.
 
 Automated layout checks do not confirm rendered pixels or real mouse interaction.
-Visual acceptance remains a separate check. The harness supports PLAYER probes
-and fresh test sessions; it does not attach a debugger, automate arbitrary game
+Visual acceptance remains a separate check. The harness supports player, global,
+and actor probes in fresh test sessions. MENU, LOAD, and local scripts on
+non-actor objects are not bundled. Tests spanning several contexts can use
+supporting scripts and the mod's events/interfaces; there is no automatic
+multi-context test suite. It does not attach a debugger, automate arbitrary game
 input, or certify save compatibility.
 
 Run the harness's regression tests without OpenMW:

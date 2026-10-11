@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenMW Runtime Tests"
+  short_description: "Run isolated Lua tests inside the real OpenMW engine"
+  default_prompt: "Use $openmw-runtime-tests to run an isolated in-engine regression test and report its evidence."
